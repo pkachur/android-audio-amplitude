@@ -1,0 +1,191 @@
+# amplitude
+
+Аудиофайл → значения амплитуды целыми числами. Консольная утилита плюс ядро,
+которое встраивается в Android-приложение как нативная библиотека.
+
+Целевая платформа — **Android 12+ (API 31+)**, но MP3-путь одинаково работает и
+на Linux/Windows/macOS, что используется для тестов.
+
+## Что умеет
+
+| Формат | Декодер | Где работает |
+|---|---|---|
+| MP3 | встроенный [minimp3](https://github.com/lieff/minimp3) | везде |
+| M4A / AAC, включая HE-AAC v1/v2 | системный MediaCodec (NDK Media API) | Android |
+| FLAC, OGG/Opus, WAV | системный MediaCodec | Android |
+
+Бэкенд выбирается автоматически по сигнатуре файла; можно задать явно
+(`--backend minimp3|media`).
+
+Значения — PCM 16 бит: **−32768..32767** (с `--abs` и свёртками `rms`/`avg`/`peak`
+получается 0..32767).
+
+Выдавать можно:
+
+* **по отсчёту файла** — 44100 значений в секунду при 44.1 кГц (по умолчанию);
+* **окном по времени** — `--ms 100` даёт 10 точек в секунду;
+* **окном по отсчётам** — `--block 1024`.
+
+Окно сворачивается одним из трёх способов: `peak` (максимум модуля), `rms`
+(среднеквадратичное, ближе к воспринимаемой громкости), `avg` (среднее модуля).
+
+## Сборка
+
+**На устройстве (Termux):**
+
+```sh
+make deps        # разово: скачает minimp3.h и minimp3_ex.h в src/
+make             # -> build/native/amplitude
+```
+
+**Кросс-сборка через Android NDK (Linux/macOS-хост):**
+
+```sh
+make NDK=/путь/к/android-ndk ABI=arm64-v8a API=31
+# ABI: arm64-v8a | armeabi-v7a | x86_64 | x86  ->  build/<abi>/amplitude
+```
+
+**Кросс-сборка с Windows-хоста** (там обычно нет GNU make):
+
+```powershell
+.\build_android.ps1 -Ndk F:\Projects\Toolchains\AndroidNDK
+# соберёт для всех ABI и бинарник, и libamplitude.so
+```
+
+**Десктоп, только MP3** (для тестов):
+
+```sh
+make MEDIANDK=0          # -> build/native/amplitude
+```
+
+Единственная зависимость — два заголовка minimp3 (public domain). `make deps`
+скачивает их сам; можно положить в `src/` руками. Системных библиотек, кроме
+самой Android (`libmediandk`), не требуется.
+
+## Запуск
+
+```
+amplitude <файл | -> [опции]
+
+  -o, --out FILE      писать в файл (по умолчанию stdout)
+  -c, --channel MODE  mix (по умолчанию) | left | right | both
+  -b, --block N       свернуть N отсчётов в одно значение
+  -m, --ms N          то же, но окном N мс (приоритетнее --block)
+  -r, --reduce MODE   свёртка окна: peak (по умолч.) | rms | avg
+      --abs           выдавать модуль
+      --raw           бинарный вывод: int32 little-endian
+      --header        первой строкой комментарий с параметрами потока
+  -n, --limit N       выдать не более N значений
+      --backend B     auto (по умолчанию) | minimp3 | media
+  -q, --quiet         не печатать информацию о файле в stderr
+  -h, --help          справка
+```
+
+Примеры:
+
+```sh
+# огибающая по 100 мс, среднеквадратичная
+amplitude track.mp3 --ms 100 --reduce rms
+
+# оба канала отдельно, пики по 20 мс, в файл
+amplitude song.m4a --ms 20 -c both -r peak -o env.txt
+
+# поотсчётные значения в бинарном виде (int32 LE) по конвейеру
+amplitude track.mp3 --raw | ./my-analyzer
+
+# из stdin
+cat track.mp3 | amplitude - --ms 50
+```
+
+Вывод (текстовый): одно значение в строке, для `-c both` — два числа через
+пробел (левый правый). Информация о файле идёт в stderr, поэтому stdout всегда
+остаётся чистыми данными:
+
+```
+$ amplitude tests/test.mp3 --ms 1000 --reduce rms --header
+amplitude: minimp3, 44100 Гц, 2 кан., отсчётов: 282624, окно 44100 отсчётов (1000.0 мс)
+# backend=minimp3 hz=44100 channels=2 values_per_point=1 block=44100 range=-32768..32767
+131
+198
+...
+amplitude: выдано точек: 7
+```
+
+## Встраивание в приложение
+
+Подробно — в [INTEGRATION.md](INTEGRATION.md): нативная библиотека через JNI
+(Gradle + CMake + Kotlin-обёртка), запуск готового бинарника из APK и линковка
+ядра в существующий C++-модуль. Коротко Kotlin-путь:
+
+```kotlin
+val amp = withContext(Dispatchers.IO) {
+    Amplitude.fromUri(context, uri, intervalMs = 100, reduce = Amplitude.REDUCE_RMS)
+}
+// amp.values: IntArray, amp.points, amp.sampleRate, amp.dbfs(i)
+```
+
+## Структура
+
+```
+src/                       ядро, общее для CLI и приложения
+  decoder.h                интерфейс: открыть источник -> читать PCM16
+  decoder_open.cpp         выбор бэкенда, определение формата, ошибки
+  decoder_minimp3.cpp      MP3
+  decoder_mediandk.cpp     MediaCodec (вне Android — заглушки)
+  envelope.h               свёртка PCM -> значения амплитуды
+  amplitude.cpp            CLI
+  minimp3.h, minimp3_ex.h  сторонние заголовки (скачиваются `make deps`)
+android/
+  amplitude_jni.cpp        мост JNI (libamplitude.so)
+  CMakeLists.txt           сборка библиотеки для Gradle
+  Amplitude.kt             Kotlin-обёртка
+tests/
+  run_tests.py             функциональные тесты
+  compare.py               сверка с эталонным PCM от ffmpeg
+  test.mp3, ref_stereo.pcm тестовые данные
+Makefile                   сборка CLI (устройство / NDK / десктоп)
+build_android.ps1          кросс-сборка с Windows-хоста
+INTEGRATION.md             как прикрутить к приложению
+```
+
+Логика свёртки лежит в `envelope.h` и используется и CLI, и JNI — результат на
+устройстве и на десктопе совпадает ровно, без второй реализации.
+
+## Тесты
+
+```sh
+make MEDIANDK=0
+python3 tests/make_fixtures.py любой_файл.m4a   # разово: готовит test.mp3 и эталон
+python3 tests/run_tests.py build/native/amplitude
+```
+
+Аудио в репозитории не хранится: `make_fixtures.py` делает из любого вашего
+файла `tests/test.mp3` и `tests/ref_stereo.pcm` (эталонный PCM от ffmpeg).
+
+`tests/run_tests.py` независимо пересчитывает ожидаемые значения на Python из
+эталонного PCM (`tests/ref_stereo.pcm`, декодирован ffmpeg) и сверяет с выходом
+программы: поотсчётные значения, режимы каналов, все три свёртки, `--ms` против
+`--block`, `--raw` против текста, stdin, `--header`, выбор бэкенда — 15 проверок.
+
+`tests/compare.py` сверяет весь декодированный поток с ffmpeg посэмплово.
+
+Что проверено на текущей версии:
+
+* декодирование MP3 совпадает с ffmpeg: длина потока — точно, расхождение
+  значений — не более 1 LSB, SNR 71.5 дБ (нормальное различие округления для
+  MP3, где стандарт описан в плавающей точке);
+* значения свёрток совпадают с независимым пересчётом **бит в бит** (max
+  расхождение 0) для `peak`, `rms`, `avg` на окнах 50/100/1000 мс;
+* сборка под Android проверена NDK r28c для arm64-v8a, armeabi-v7a, x86_64, x86 —
+  и бинарник, и `libamplitude.so`, без предупреждений; в `.so` подтверждены
+  зависимость от `libmediandk.so`, статический libc++, выравнивание сегментов на
+  16 КБ и экспорт всех JNI-символов.
+
+AAC-путь на десктопе не запускается (MediaCodec — часть Android), он проверен
+только компиляцией и линковкой; работу на файле надо подтвердить на устройстве.
+
+## Лицензии
+
+Код проекта — ваш. Единственная сторонняя зависимость, minimp3, распространяется
+как public domain (CC0). MediaCodec — часть Android, ничего доустанавливать и
+лицензировать не нужно.

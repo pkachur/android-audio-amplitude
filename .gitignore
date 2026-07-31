@@ -1,0 +1,25 @@
+# сборка
+build/
+*.o
+*.obj
+*.exe
+*.pdb
+*.so
+*.ilk
+
+# сторонние заголовки — скачиваются `make deps`
+src/minimp3.h
+src/minimp3_ex.h
+
+# тестовые фикстуры — генерируются `python tests/make_fixtures.py <аудиофайл>`
+tests/*.mp3
+tests/*.m4a
+tests/*.wav
+tests/*.pcm
+tests/*.i32
+*.m4a
+
+# служебное
+.idea/
+.vscode/
+.DS_Store
