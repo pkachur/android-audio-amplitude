@@ -4,8 +4,12 @@
     python tests/make_fixtures.py <аудиофайл> [--ffmpeg путь]
 
 Создаёт:
-    tests/test.mp3        — исходник, перекодированный в MP3 CBR 192 кбит/с
+    tests/test.mp3        — исходник, перекодированный в MP3 CBR 192 кбит/с (стерео)
     tests/ref_stereo.pcm  — эталонный PCM (s16le, стерео, интерливед) от ffmpeg
+    tests/test_mono.mp3   — то же в моно (покрывает отдельную ветку кода)
+    tests/ref_mono.pcm    — эталонный PCM для моно
+    tests/test_loud.mp3   — синтетический перегруженный сигнал: проверяет, что
+                            выход не выходит за 32767 (модуль -32768 равен 32768)
 
 Эталон нужен, чтобы run_tests.py сверял выход amplitude с независимым
 декодером и независимо пересчитанными свёртками. Годится любой файл, который
@@ -48,22 +52,38 @@ def main():
         sys.exit('нет такого файла: %s' % args.source)
 
     ff = find_ffmpeg(args.ffmpeg)
-    mp3 = os.path.join(HERE, 'test.mp3')
-    pcm = os.path.join(HERE, 'ref_stereo.pcm')
-
     print('ffmpeg: %s' % ff)
-    subprocess.run([ff, '-hide_banner', '-loglevel', 'error', '-y',
-                    '-i', args.source, '-c:a', 'libmp3lame', '-b:a', '192k',
-                    '-ac', '2', mp3], check=True)
-    # Эталон снимается именно с test.mp3, а не с исходника: сверяем декодирование
-    # одного и того же битстрима двумя разными декодерами.
-    subprocess.run([ff, '-hide_banner', '-loglevel', 'error', '-y',
-                    '-i', mp3, '-f', 's16le', '-acodec', 'pcm_s16le', pcm],
-                   check=True)
 
-    frames = os.path.getsize(pcm) // 4
-    print('%s  (%d КБ)' % (mp3, os.path.getsize(mp3) // 1024))
-    print('%s  (%d отсчётов, %.2f с при 44.1 кГц)' % (pcm, frames, frames / 44100.0))
+    def run(cmd):
+        subprocess.run([ff, '-hide_banner', '-loglevel', 'error', '-y'] + cmd, check=True)
+
+    def encode(channels, dst):
+        run(['-i', args.source, '-c:a', 'libmp3lame', '-b:a', '192k',
+             '-ac', str(channels), dst])
+
+    def reference(src, channels, dst):
+        # Эталон снимается именно с mp3, а не с исходника: сверяем декодирование
+        # одного и того же битстрима двумя разными декодерами.
+        run(['-i', src, '-f', 's16le', '-acodec', 'pcm_s16le', '-ac', str(channels), dst])
+
+    p = lambda name: os.path.join(HERE, name)
+
+    encode(2, p('test.mp3'))
+    reference(p('test.mp3'), 2, p('ref_stereo.pcm'))
+    encode(1, p('test_mono.mp3'))
+    reference(p('test_mono.mp3'), 1, p('ref_mono.pcm'))
+
+    # Перегруженная синусоида: после клиппирования появляются отсчёты -32768,
+    # модуль которых (32768) выходит за объявленный диапазон, если не ограничить.
+    run(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=2:sample_rate=44100',
+         '-af', 'volume=20dB', '-ac', '2', '-c:a', 'libmp3lame', '-b:a', '320k',
+         p('test_loud.mp3')])
+
+    for name, per_frame in (('ref_stereo.pcm', 4), ('ref_mono.pcm', 2)):
+        frames = os.path.getsize(p(name)) // per_frame
+        print('%s  (%d отсчётов, %.2f с при 44.1 кГц)' % (name, frames, frames / 44100.0))
+    for name in ('test.mp3', 'test_mono.mp3', 'test_loud.mp3'):
+        print('%s  (%d КБ)' % (name, os.path.getsize(p(name)) // 1024))
     print('\nТеперь: python tests/run_tests.py <путь к amplitude>')
 
 

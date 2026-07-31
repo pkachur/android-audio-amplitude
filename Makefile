@@ -49,9 +49,27 @@ else
   $(error Неизвестный ABI '$(ABI)': arm64-v8a | armeabi-v7a | x86_64 | x86)
 endif
 
-HOST_TAG  ?= $(shell uname -s | tr 'A-Z' 'a-z')-x86_64
+# В Git Bash / MSYS uname выдаёт mingw64_nt-… и cygwin_nt-…, а каталог в NDK
+# называется windows-x86_64 — без этой развилки кросс-сборка с Windows не идёт.
+UNAME_S := $(shell uname -s)
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+  HOST_TAG ?= windows-x86_64
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+  HOST_TAG ?= windows-x86_64
+else ifneq (,$(findstring CYGWIN,$(UNAME_S)))
+  HOST_TAG ?= windows-x86_64
+else ifeq ($(UNAME_S),Darwin)
+  HOST_TAG ?= darwin-x86_64
+else
+  HOST_TAG ?= linux-x86_64
+endif
+
 TOOLCHAIN := $(NDK)/toolchains/llvm/prebuilt/$(HOST_TAG)
-CXX       := $(TOOLCHAIN)/bin/$(TRIPLE)$(API)-clang++
+ifeq ($(HOST_TAG),windows-x86_64)
+  CXX := $(TOOLCHAIN)/bin/$(TRIPLE)$(API)-clang++.cmd
+else
+  CXX := $(TOOLCHAIN)/bin/$(TRIPLE)$(API)-clang++
+endif
 MEDIANDK  ?= 1
 
 # PIE обязателен для исполняемых файлов Android (clang даёт его сам при API >= 21);
@@ -77,7 +95,7 @@ endif
 BIN := $(OUTDIR)/$(APP)
 
 # ------------------------------------------------------------------- правила
-.PHONY: all deps clean distclean test
+.PHONY: all deps clean distclean test unit
 
 all: $(BIN)
 
@@ -103,8 +121,15 @@ $(SRCDIR)/minimp3.h $(SRCDIR)/minimp3_ex.h:
 	    exit 1; \
 	fi
 
-# Тесты гоняются на хостовой сборке (нужны python3 и tests/test.mp3)
-test: $(BIN)
+# Юнит-тесты свёртки: ни аудиофайлов, ни python не требуют.
+# Только для хостовой сборки — при NDK=... бинарник не запустится на хосте.
+unit: tests/test_envelope.cpp $(SRCDIR)/envelope.h $(SRCDIR)/decoder.h
+	@mkdir -p build
+	$(CXX) -O2 -std=c++11 -Wall -Wextra -I$(SRCDIR) -o build/test_envelope tests/test_envelope.cpp
+	./build/test_envelope
+
+# Функциональные тесты (нужны python3 и фикстуры, см. tests/make_fixtures.py)
+test: $(BIN) unit
 	python3 tests/run_tests.py $(BIN)
 
 clean:

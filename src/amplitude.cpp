@@ -69,10 +69,19 @@ void usage(const char *argv0)
 
 class Out {
 public:
-    explicit Out(FILE *f) : f_(f), n_(0) {}
+    explicit Out(FILE *f) : f_(f), n_(0), err_(false) {}
     ~Out() { flush(); }
 
-    void flush() { if (n_) { fwrite(buf_, 1, n_, f_); n_ = 0; } }
+    void flush()
+    {
+        if (n_) {
+            if (fwrite(buf_, 1, n_, f_) != n_) err_ = true;   // диск кончился и т.п.
+            n_ = 0;
+        }
+    }
+
+    /// Была ли ошибка записи. Проверять до разрушения объекта.
+    bool error() const { return err_ || ferror(f_) != 0; }
 
     void ch(char c)
     {
@@ -109,6 +118,7 @@ private:
     FILE  *f_;
     char   buf_[SZ];
     size_t n_;
+    bool   err_;
 };
 
 struct TextSink {
@@ -268,7 +278,8 @@ int main(int argc, char **argv)
         }
     }
 
-    long long points = 0;
+    long long points  = 0;
+    bool      writeOk = true;
     {
         Out out(fout);
 
@@ -283,11 +294,29 @@ int main(int argc, char **argv)
 
         if (o.binary) { RawSink  sink{out}; points = amp::run(*dec, o.p, sink); }
         else          { TextSink sink{out}; points = amp::run(*dec, o.p, sink); }
+
+        out.flush();
+        writeOk = !out.error();
     }
 
     if (!o.quiet) fprintf(stderr, "amplitude: выдано точек: %lld\n", points);
 
+    int rc = 0;
+    // Сбой декодера обязан быть виден: иначе усечённые данные уйдут как успех.
+    if (dec->failed()) {
+        fprintf(stderr, "amplitude: декодирование прервано: %s\n", amp::lastError());
+        rc = 1;
+    }
+    if (!writeOk) {
+        fprintf(stderr, "amplitude: ошибка записи вывода\n");
+        rc = 1;
+    }
+
     delete dec;
-    if (fout != stdout) fclose(fout); else fflush(stdout);
-    return 0;
+    if (fout != stdout) {
+        if (fclose(fout) != 0) { fprintf(stderr, "amplitude: ошибка закрытия файла вывода\n"); rc = 1; }
+    } else {
+        if (fflush(stdout) != 0) { fprintf(stderr, "amplitude: ошибка записи в stdout\n"); rc = 1; }
+    }
+    return rc;
 }

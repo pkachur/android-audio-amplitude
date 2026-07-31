@@ -29,9 +29,20 @@ inline int resolveBlock(const Params &p, int sampleRate)
 {
     if (p.intervalMs > 0 && sampleRate > 0) {
         long long b = (long long)sampleRate * p.intervalMs / 1000;
-        return b < 1 ? 1 : (int)b;
+        if (b < 1) return 1;
+        if (b > 0x7fffffffLL) return 0x7fffffff;   // абсурдно большой intervalMs
+        return (int)b;
     }
     return p.block < 1 ? 1 : p.block;
+}
+
+/// Приведение к диапазону PCM16. Нужно потому, что модуль минимального
+/// отсчёта выходит за него: -(-32768) = 32768.
+inline int32_t clampAmp(int64_t v)
+{
+    if (v >  32767) return  32767;
+    if (v < -32768) return -32768;
+    return (int32_t)v;
 }
 
 /// Сколько чисел приходится на одну точку: 2 только для CH_BOTH со стерео.
@@ -84,8 +95,8 @@ long long run(Decoder &dec, const Params &p, Sink &sink)
             if (block == 1) {
                 int32_t w[2] = { v[0], v[1] };
                 if (p.absolute) {
-                    if (w[0] < 0) w[0] = -w[0];
-                    if (w[1] < 0) w[1] = -w[1];
+                    w[0] = clampAmp(w[0] < 0 ? -(int64_t)w[0] : w[0]);
+                    w[1] = clampAmp(w[1] < 0 ? -(int64_t)w[1] : w[1]);
                 }
                 sink(w, outch);
             } else {
@@ -100,9 +111,9 @@ long long run(Decoder &dec, const Params &p, Sink &sink)
                 int32_t w[2] = {0, 0};
                 for (int c = 0; c < outch; ++c) {
                     switch (p.reduce) {
-                        case RD_RMS: w[c] = (int32_t)(sqrt(accSq[c] / inBlock) + 0.5); break;
-                        case RD_AVG: w[c] = (int32_t)(accAbs[c] / inBlock);            break;
-                        default:     w[c] = (int32_t)accPeak[c];                       break;
+                        case RD_RMS: w[c] = clampAmp((int64_t)(sqrt(accSq[c] / inBlock) + 0.5)); break;
+                        case RD_AVG: w[c] = clampAmp(accAbs[c] / inBlock);                      break;
+                        default:     w[c] = clampAmp(accPeak[c]);                                break;
                     }
                     accPeak[c] = 0; accAbs[c] = 0; accSq[c] = 0.0;
                 }
@@ -120,9 +131,9 @@ long long run(Decoder &dec, const Params &p, Sink &sink)
         int32_t w[2] = {0, 0};
         for (int c = 0; c < outch; ++c) {
             switch (p.reduce) {
-                case RD_RMS: w[c] = (int32_t)(sqrt(accSq[c] / inBlock) + 0.5); break;
-                case RD_AVG: w[c] = (int32_t)(accAbs[c] / inBlock);            break;
-                default:     w[c] = (int32_t)accPeak[c];                       break;
+                case RD_RMS: w[c] = clampAmp((int64_t)(sqrt(accSq[c] / inBlock) + 0.5)); break;
+                case RD_AVG: w[c] = clampAmp(accAbs[c] / inBlock);                      break;
+                default:     w[c] = clampAmp(accPeak[c]);                                break;
             }
         }
         sink(w, outch);

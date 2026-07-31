@@ -126,6 +126,9 @@ object Amplitude {
         limitPoints: Int = 0,
         backend: Int = BACKEND_AUTO,
     ): Amplitudes {
+        require(offset >= 0 && length > 0 && length <= data.size - offset) {
+            "некорректный диапазон: offset=$offset length=$length при размере ${data.size}"
+        }
         val info = IntArray(5)
         val values = nativeDecodeBytes(
             data, offset, length, channel, reduce, block, intervalMs,

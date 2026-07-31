@@ -128,19 +128,29 @@ public:
 
             int stall = 0;
             while (pending_.empty() && !outputDone_ && stall++ < kMaxStallRounds) pump();
-            if (pending_.empty()) break;
+            if (pending_.empty()) {
+                if (!outputDone_) {      // вышли по счётчику простоя, а не по концу потока
+                    setLastError("MediaCodec: декодер перестал отдавать данные (таймаут)");
+                    markFailed();
+                }
+                break;
+            }
         }
         return written;
     }
 
     const char *backend() const override { return "mediandk"; }
+    bool failed() const override { return failed_; }
 
 private:
     // --- AMediaDataSource: чтение из памяти ---------------------------
+    // Контракт NdkMediaDataSource.h: 0 возвращается только при size == 0,
+    // конец потока обозначается -1. Возврат 0 на EOF ломает разбор контейнера.
     static ssize_t srcReadAt(void *ud, off64_t offset, void *buf, size_t size)
     {
         MediaNdkDecoder *self = static_cast<MediaNdkDecoder *>(ud);
-        if (offset < 0 || (uint64_t)offset >= self->copy_.size()) return 0;   // 0 = EOF
+        if (size == 0) return 0;
+        if (offset < 0 || (uint64_t)offset >= self->copy_.size()) return -1;
         const size_t n = std::min(size, self->copy_.size() - (size_t)offset);
         memcpy(buf, self->copy_.data() + offset, n);
         return (ssize_t)n;
@@ -174,7 +184,11 @@ private:
         }
         if (track < 0) { setLastError("в файле нет аудиодорожки"); return false; }
 
-        AMediaExtractor_selectTrack(ex_, (size_t)track);
+        if (AMediaExtractor_selectTrack(ex_, (size_t)track) != AMEDIA_OK) {
+            AMediaFormat_delete(fmt);
+            setLastError("MediaExtractor: не удалось выбрать дорожку %d", track);
+            return false;
+        }
 
         int32_t v32 = 0;
         int64_t v64 = 0;
@@ -204,8 +218,22 @@ private:
 
         if (hz_ <= 0 || ch_ < 1) { setLastError("MediaCodec: не удалось определить параметры PCM"); return false; }
         if (ch_ > 2) { setLastError("MediaCodec: %d каналов не поддерживается (нужно 1 или 2)", ch_); return false; }
-        if (pending_.empty() && outputDone_) { setLastError("MediaCodec: декодер не выдал ни одного отсчёта"); return false; }
+        if (pending_.empty()) {
+            // Сюда попадаем и при пустой дорожке, и при сбое кодека, и при простое:
+            // в первых двух случаях текст ошибки уже выставлен в pump().
+            if (!failed_) setLastError("MediaCodec: декодер не выдал ни одного отсчёта");
+            return false;
+        }
         return true;
+    }
+
+    /// Сбой декодера: помечаем поток и прекращаем работу. Текст ошибки к этому
+    /// моменту уже выставлен вызывающим кодом через setLastError.
+    void markFailed()
+    {
+        failed_     = true;
+        inputDone_  = true;
+        outputDone_ = true;
     }
 
     // --- один цикл «подать вход / забрать выход» ----------------------
@@ -216,7 +244,12 @@ private:
             if (ii >= 0) {
                 size_t   cap = 0;
                 uint8_t *ib  = AMediaCodec_getInputBuffer(codec_, (size_t)ii, &cap);
-                const ssize_t got = ib ? AMediaExtractor_readSampleData(ex_, ib, cap) : -1;
+                if (!ib) {   // это отказ кодека, а не конец данных
+                    setLastError("MediaCodec: не удалось получить входной буфер");
+                    markFailed();
+                    return;
+                }
+                const ssize_t got = AMediaExtractor_readSampleData(ex_, ib, cap);
                 if (got < 0) {
                     AMediaCodec_queueInputBuffer(codec_, (size_t)ii, 0, 0, 0,
                                                  AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
@@ -250,8 +283,13 @@ private:
                 if (AMediaFormat_getInt32(of, AMEDIAFORMAT_KEY_PCM_ENCODING, &v))           enc_ = v;
                 AMediaFormat_delete(of);
             }
+        } else if (oi != AMEDIACODEC_INFO_TRY_AGAIN_LATER &&
+                   oi != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {
+            // Любой прочий отрицательный код — отказ кодека (битый поток и т.п.).
+            // Раньше он молча игнорировался и выглядел как конец файла.
+            setLastError("MediaCodec: ошибка при получении выходного буфера (код %d)", (int)oi);
+            markFailed();
         }
-        // AMEDIACODEC_INFO_TRY_AGAIN_LATER и _OUTPUT_BUFFERS_CHANGED — просто ждём дальше
     }
 
     // --- приведение выходного PCM к int16 -----------------------------
@@ -316,6 +354,7 @@ private:
     int64_t durationUs_ = 0;
     bool    inputDone_  = false;
     bool    outputDone_ = false;
+    bool    failed_     = false;
 };
 
 } // namespace
