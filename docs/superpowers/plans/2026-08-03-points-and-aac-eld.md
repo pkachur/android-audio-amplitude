@@ -739,6 +739,7 @@ git commit -m "Сумма квадратов в свёртке — целая: �
   - поле `long long amp::Params::points = 0;` (0 — не использовать)
   - `struct amp::Sub` с полями `peak[2]`, `absSum[2]`, `sqSum[2]`, `count`
   - `amp::subReset(Sub&)`, `amp::subAdd(Sub&, const int32_t*, int)`, `amp::subMerge(Sub&, const Sub&)`, `amp::subValue(const Sub&, int c, int reduce) -> int32_t`
+  - `amp::mixFrame(const int16_t *pcm, size_t i, int nch, int chan, int32_t *v)` — общая для `run()` и `runPoints()`
   - `amp::runPoints(Decoder&, const Params&, std::vector<int32_t>&, long long *totalSamples) -> long long`
 
 - [ ] **Step 1: Написать падающие тесты**
@@ -916,9 +917,45 @@ int32_t reduceDirect(const std::vector<int16_t> &pcm, size_t from, size_t to, in
 const long long kMaxPoints = 16384;
 ```
 
-- [ ] **Step 4: Добавить подокно и операции над ним**
+- [ ] **Step 4: Вынести смешивание каналов в общую функцию**
 
-В `src/envelope.h` после `valuesPerPoint`:
+`runPoints` разбирает кадр ровно так же, как `run()`. Двух копий быть не должно:
+правка режима канала в одной из них молча разошлась бы с другой.
+
+В `src/envelope.h` сразу после `valuesPerPoint`:
+
+```cpp
+/// Кадр PCM -> одно или два значения по режиму канала.
+/// Общая для run() и runPoints(): иначе два пути начали бы смешивать по-разному.
+inline void mixFrame(const int16_t *pcm, size_t i, int nch, int chan, int32_t *v)
+{
+    if (nch == 1) {
+        v[0] = pcm[i];
+        v[1] = v[0];
+        return;
+    }
+    const int32_t l = pcm[i], r = pcm[i + 1];
+    switch (chan) {
+        case CH_LEFT:  v[0] = l;           v[1] = l;    break;
+        case CH_RIGHT: v[0] = r;           v[1] = r;    break;
+        case CH_BOTH:  v[0] = l;           v[1] = r;    break;
+        default:       v[0] = (l + r) / 2; v[1] = v[0]; break;
+    }
+}
+```
+
+В теле `run()` заменить весь блок разбора кадра — от `int32_t v[2];` до
+закрывающей скобки `if (nch == 1) { ... } else { ... switch (p.chan) ... }`
+включительно — на две строки:
+
+```cpp
+            int32_t v[2];
+            mixFrame(pcm.data(), i, nch, p.chan, v);
+```
+
+- [ ] **Step 5: Добавить подокно и операции над ним**
+
+В `src/envelope.h` после `mixFrame`:
 
 ```cpp
 // ------------------------------------------------- подокна для --points
@@ -978,7 +1015,7 @@ inline int32_t subValue(const Sub &s, int c, int reduce)
 }
 ```
 
-- [ ] **Step 5: Реализовать `runPoints`**
+- [ ] **Step 6: Реализовать `runPoints`**
 
 В `src/envelope.h` после `run()`:
 
@@ -1026,18 +1063,7 @@ inline long long runPoints(Decoder &dec, const Params &p,
 
         for (size_t i = 0; i + (size_t)nch <= got; i += (size_t)nch) {
             int32_t v[2];
-            if (nch == 1) {
-                v[0] = pcm[i];
-                v[1] = v[0];
-            } else {
-                const int32_t l = pcm[i], r = pcm[i + 1];
-                switch (p.chan) {
-                    case CH_LEFT:  v[0] = l;           v[1] = l;    break;
-                    case CH_RIGHT: v[0] = r;           v[1] = r;    break;
-                    case CH_BOTH:  v[0] = l;           v[1] = r;    break;
-                    default:       v[0] = (l + r) / 2; v[1] = v[0]; break;
-                }
-            }
+            mixFrame(pcm.data(), i, nch, p.chan, v);
 
             subAdd(cur, v, outch);
             ++total;
@@ -1081,7 +1107,7 @@ inline long long runPoints(Decoder &dec, const Params &p,
 }
 ```
 
-- [ ] **Step 6: Прогнать юнит-тесты**
+- [ ] **Step 7: Прогнать юнит-тесты**
 
 ```powershell
 .\build_host.ps1 -Tests
@@ -1091,7 +1117,7 @@ inline long long runPoints(Decoder &dec, const Params &p,
 новых: проверка 18 даёт три галочки, по одной на свёртку), 19 из 19 в
 `test_sniff`, без предупреждений `/W4`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/envelope.h tests/test_envelope.cpp
@@ -1297,7 +1323,22 @@ struct Options {
 
 - [ ] **Step 5: Развести два пути в `main`**
 
-Заменить в `src/amplitude.cpp` часть от `const int block = amp::resolveBlock(...)`
+Оба пути печатают одну и ту же шапку заголовка, поэтому она выносится в функцию.
+В `src/amplitude.cpp` в анонимное пространство имён, после `struct RawSink`:
+
+```cpp
+/// Общая часть строки-заголовка: параметры потока без сетки и диапазона.
+/// Сетка и диапазон у двух путей разные, всё остальное обязано совпадать.
+void writeHeaderPrefix(Out &out, const amp::Decoder &dec, int outch)
+{
+    out.str("# backend="); out.str(dec.backend());
+    out.str(" hz=");       out.num(dec.sampleRate());
+    out.str(" channels="); out.num(dec.channels());
+    out.str(" values_per_point="); out.num(outch);
+}
+```
+
+Затем заменить часть от `const int block = amp::resolveBlock(...)`
 до конца блока `{ Out out(fout); ... }` на:
 
 ```cpp
@@ -1346,10 +1387,7 @@ struct Options {
 
         Out out(fout);
         if (o.header && !o.binary) {
-            out.str("# backend="); out.str(dec->backend());
-            out.str(" hz=");       out.num(dec->sampleRate());
-            out.str(" channels="); out.num(dec->channels());
-            out.str(" values_per_point="); out.num(outch);
+            writeHeaderPrefix(out, *dec, outch);
             out.str(" points=");   out.num((int32_t)points);
             out.str(" block=");    out.num(block);
             out.str(" range=0..32767\n");
@@ -1379,10 +1417,7 @@ struct Options {
 
         Out out(fout);
         if (o.header && !o.binary) {
-            out.str("# backend="); out.str(dec->backend());
-            out.str(" hz=");       out.num(dec->sampleRate());
-            out.str(" channels="); out.num(dec->channels());
-            out.str(" values_per_point="); out.num(outch);
+            writeHeaderPrefix(out, *dec, outch);
             out.str(" block=");    out.num(block);
             out.str(" range=-32768..32767\n");
         }
