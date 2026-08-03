@@ -121,12 +121,15 @@ $(SRCDIR)/minimp3.h $(SRCDIR)/minimp3_ex.h:
 	    exit 1; \
 	fi
 
-# Юнит-тесты свёртки: ни аудиофайлов, ни python не требуют.
+# Юнит-тесты свёртки и определения формата: ни аудиофайлов, ни python не требуют.
 # Только для хостовой сборки — при NDK=... бинарник не запустится на хосте.
-unit: tests/test_envelope.cpp $(SRCDIR)/envelope.h $(SRCDIR)/decoder.h
+unit: tests/test_envelope.cpp tests/test_sniff.cpp tests/check.h \
+      $(SRCDIR)/envelope.h $(SRCDIR)/sniff.h $(SRCDIR)/decoder.h
 	@mkdir -p build
 	$(CXX) -O2 -std=c++11 -Wall -Wextra -I$(SRCDIR) -o build/test_envelope tests/test_envelope.cpp
+	$(CXX) -O2 -std=c++11 -Wall -Wextra -I$(SRCDIR) -o build/test_sniff tests/test_sniff.cpp
 	./build/test_envelope
+	./build/test_sniff
 
 # Функциональные тесты (нужны python3 и фикстуры, см. tests/make_fixtures.py)
 test: $(BIN) unit

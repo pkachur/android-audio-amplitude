@@ -11,22 +11,13 @@
 
 #include "decoder.h"
 #include "envelope.h"
+#include "check.h"
 
 #include <cstdio>
 #include <cstring>
 #include <vector>
 
 namespace {
-
-int failures = 0;
-int total    = 0;
-
-void check(const char *name, bool ok, const char *detail = "")
-{
-    ++total;
-    if (!ok) ++failures;
-    printf("[%s] %s%s%s\n", ok ? "OK " : "FAIL", name, *detail ? "  -- " : "", detail);
-}
 
 /// Декодер, отдающий заранее заданный PCM. Позволяет подать точные значения,
 /// которых не добиться от настоящего кодека.
@@ -89,7 +80,7 @@ int main()
         amp::Params p;
         p.absolute = true;
         const std::vector<int32_t> out = runOn(minSamples, 1, p);
-        check("--abs от -32768 ограничен 32767",
+        t::check("--abs от -32768 ограничен 32767",
               out.size() == minSamples.size() && maxOf(out) == 32767,
               out.empty() ? "пусто" : (maxOf(out) == 32767 ? "" : "получено больше 32767"));
     }
@@ -106,7 +97,7 @@ int main()
             const std::vector<int32_t> out = runOn(minSamples, 1, p);
             char detail[64];
             snprintf(detail, sizeof(detail), "max %d, точек %d", maxOf(out), (int)out.size());
-            check(modes[i].name, out.size() == 4 && maxOf(out) == 32767, detail);
+            t::check(modes[i].name, out.size() == 4 && maxOf(out) == 32767, detail);
         }
     }
 
@@ -114,7 +105,7 @@ int main()
     {
         amp::Params p;
         const std::vector<int32_t> out = runOn(minSamples, 1, p);
-        check("без --abs -32768 сохраняется", !out.empty() && out[0] == -32768);
+        t::check("без --abs -32768 сохраняется", !out.empty() && out[0] == -32768);
     }
 
     // 6. mix усекает к нулю, как целочисленное деление в C++
@@ -124,7 +115,7 @@ int main()
         pcm.push_back(3);  pcm.push_back(0);      // (3 + 0) / 2 == 1
         amp::Params p;
         const std::vector<int32_t> out = runOn(pcm, 2, p);
-        check("mix усекает к нулю", out.size() == 2 && out[0] == 0 && out[1] == 1);
+        t::check("mix усекает к нулю", out.size() == 2 && out[0] == 0 && out[1] == 1);
     }
 
     // 7. CH_BOTH на стерео даёт по два значения на точку
@@ -134,7 +125,7 @@ int main()
         amp::Params p;
         p.chan = amp::CH_BOTH;
         const std::vector<int32_t> out = runOn(pcm, 2, p);
-        check("CH_BOTH: два значения на точку",
+        t::check("CH_BOTH: два значения на точку",
               out.size() == 16 && out[0] == 100 && out[1] == -100);
     }
 
@@ -144,7 +135,7 @@ int main()
         amp::Params p;
         p.chan = amp::CH_BOTH;
         const std::vector<int32_t> out = runOn(pcm, 1, p);
-        check("CH_BOTH на моно: одно значение на точку", out.size() == 8);
+        t::check("CH_BOTH на моно: одно значение на точку", out.size() == 8);
     }
 
     // 9. limit ограничивает число точек
@@ -152,7 +143,7 @@ int main()
         amp::Params p;
         p.limit = 5;
         const std::vector<int32_t> out = runOn(minSamples, 1, p);
-        check("limit ограничивает выдачу", out.size() == 5);
+        t::check("limit ограничивает выдачу", out.size() == 5);
     }
 
     // 10. неполное последнее окно всё равно выдаётся
@@ -161,7 +152,7 @@ int main()
         amp::Params p;
         p.block = 4;                              // 2 полных окна + хвост из 2 отсчётов
         const std::vector<int32_t> out = runOn(pcm, 1, p);
-        check("хвостовое неполное окно выдаётся", out.size() == 3);
+        t::check("хвостовое неполное окно выдаётся", out.size() == 3);
     }
 
     // 11. огромный intervalMs не переполняет int
@@ -171,20 +162,18 @@ int main()
         const int block = amp::resolveBlock(p, 44100);
         char detail[64];
         snprintf(detail, sizeof(detail), "block = %d", block);
-        check("огромный intervalMs не даёт отрицательный block", block > 0, detail);
+        t::check("огромный intervalMs не даёт отрицательный block", block > 0, detail);
     }
 
     // 12. intervalMs пересчитывается по фактической частоте
     {
         amp::Params p;
         p.intervalMs = 100;
-        check("intervalMs 100 при 48 кГц = 4800 отсчётов",
+        t::check("intervalMs 100 при 48 кГц = 4800 отсчётов",
               amp::resolveBlock(p, 48000) == 4800);
-        check("intervalMs 100 при 22.05 кГц = 2205 отсчётов",
+        t::check("intervalMs 100 при 22.05 кГц = 2205 отсчётов",
               amp::resolveBlock(p, 22050) == 2205);
     }
 
-    printf("\n%s (%d из %d)\n", failures ? "ЕСТЬ ПРОВАЛЫ" : "ВСЕ ЮНИТ-ТЕСТЫ ПРОШЛИ",
-           total - failures, total);
-    return failures ? 1 : 0;
+    return t::report();
 }
