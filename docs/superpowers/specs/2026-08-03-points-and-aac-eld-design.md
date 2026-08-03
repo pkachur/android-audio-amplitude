@@ -195,7 +195,8 @@ minimp3.
 
 ### Реальные файлы
 
-В `audio/` лежат записи приложения (в git не коммитятся). Что они дают:
+В `audio/` лежат записи приложения (в git не коммитятся, каталог в `.gitignore`).
+Что они дают:
 
 * шесть целых файлов — моно, 44100 Гц, `.m4a`, **HE-AAC v1** (`AOT = 5`, SBR
   поверх ядра LC), от 39 с до 19 минут;
@@ -233,7 +234,10 @@ minimp3.
 | `src/amplitude.cpp` | опция `--points`, взаимоисключение, заголовок и строка в stderr |
 | `android/amplitude_jni.cpp` | параметр `points` в трёх native-функциях |
 | `android/Amplitude.kt` | параметр `points`, `require` на взаимоисключение |
-| `tests/test_envelope.cpp` | тесты `runPoints` и сниффера |
+| `src/sniff.h` | новый: определение формата вынесено из `decoder_open.cpp`, чтобы тестироваться без сборки декодеров |
+| `tests/check.h` | новый: общий харнесс юнит-тестов для двух файлов тестов |
+| `tests/test_envelope.cpp` | тесты `runPoints` |
+| `tests/test_sniff.cpp` | новый: тесты сниффера на синтетических заголовках |
 | `tests/run_tests.py` | функциональные тесты `--points` |
 | `tests/check_eld.py` | новый: маршрутизация на реальных файлах, режим `--device` |
 | `README.md`, `INTEGRATION.md` | `--points`, AAC ELD и четыре контейнера, раздел «что проверено» |
