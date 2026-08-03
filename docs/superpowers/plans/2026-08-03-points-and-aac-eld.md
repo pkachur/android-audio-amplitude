@@ -1,6 +1,14 @@
 # Ровно N точек на файл и гарантия AAC ELD — план реализации
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Выполнение этого плана уже начато и не закончено.** Прежде чем что-либо
+> делать, прочитайте журнал прогона
+> [`.superpowers/sdd/2026-08-03-points-and-aac-eld/progress.md`](../../../.superpowers/sdd/2026-08-03-points-and-aac-eld/progress.md):
+> там статусы всех семи задач, точка возобновления, какое ревью висит
+> незакрытым и как поднять окружение (заголовки minimp3, тестовые фикстуры и
+> записи в `audio/` в репозиторий не кладутся). Коммиты, которые называет
+> журнал, существуют в git — доверяйте ему, а не догадкам по коду.
 
 **Goal:** Добавить опцию `--points N` (ровно N значений амплитуды на весь файл) и гарантировать AAC ELD во всех четырёх контейнерах из таблицы Android (`.3gp`, `.m4a`/`.mp4`, `.aac`, `.ts`).
 
