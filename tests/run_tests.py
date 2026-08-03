@@ -255,6 +255,29 @@ expect_fail([os.path.join(HERE, 'нет-такого-файла.mp3')], 'нес�
             'не удалось открыть')
 expect_fail([HERE], 'каталог вместо файла отвергается')
 
+# 15. контейнеры, которые не должны попадать в minimp3 -----------------------
+ts_file = os.path.join(HERE, 'tmp_fake.ts')
+pkt = bytearray(188 * 3)
+for i in range(3):
+    pkt[i * 188] = 0x47
+for i in range(20, 180):
+    pkt[i] = 0xFF                            # стаффинг PAT/PMT — ловушка для сниффера
+with open(ts_file, 'wb') as f:
+    f.write(bytes(pkt))
+expect_fail([ts_file], 'MPEG-TS не уходит в minimp3', 'не распознан')
+os.remove(ts_file)
+
+# Валидный заголовок MPEG за пределами первых 16 байт: раньше голова читалась
+# по 16 байт и такой файл нюхался как «не MP3». Теперь он уходит в minimp3
+# первым, и в ошибке должно быть видно именно minimp3.
+deep = os.path.join(HERE, 'tmp_deep_sync.bin')
+body = bytearray(800)
+body[600:604] = b'\xFF\xFB\x90\x00'
+with open(deep, 'wb') as f:
+    f.write(bytes(body))
+expect_fail([deep], 'кадр MPEG на смещении 600 виден сниферу', 'minimp3')
+os.remove(deep)
+
 os.remove(garbage)
 os.remove(empty)
 

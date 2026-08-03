@@ -74,7 +74,10 @@ Decoder *openFile(const char *path, Backend backend)
     if (backend == BACKEND_MINIMP3)  return openMinimp3File(path);
     if (backend == BACKEND_MEDIANDK) return openMediandkFile(path);
 
-    uint8_t head[16] = {0};
+    // 1024 байта — столько же, сколько сканирует looksLikeMpegAudio, и минимум
+    // 377 байт нужно, чтобы разглядеть три пакета MPEG-TS. С прежними 16 байтами
+    // файл и буфер нюхались по-разному.
+    uint8_t head[1024] = {0};
     size_t n = 0;
     if (FILE *f = fopen(path, "rb")) {
         n = fread(head, 1, sizeof(head), f);
@@ -134,7 +137,7 @@ Decoder *openFd(int fd, long long offset, long long size, Backend backend)
 #ifdef AMP_HAVE_POSIX_IO
     // Для minimp3 читаем содержимое в память (декодеру нужен непрерывный буфер).
     // Сначала — сигнатура, чтобы не тянуть в память чужой формат зря.
-    uint8_t head[16] = {0};
+    uint8_t head[1024] = {0};
     const ssize_t hn = pread(fd, head, sizeof(head), (off_t)offset);
     const bool mpeg = hn > 0 && looksLikeMpegAudio(head, (size_t)hn);
     SavedError first;

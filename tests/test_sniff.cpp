@@ -100,5 +100,68 @@ int main()
         t::check("мусор без синхросигнала -> не MP3", !sniff(b));
     }
 
+    // 8. MPEG-TS: пакеты по 188 байт. Заполнение таблиц байтами 0xFF раньше
+    //    выглядело как заголовок MPEG.
+    {
+        std::vector<uint8_t> b = zeros(4 + 3 * 192 + 8);
+        for (int i = 0; i < 3; ++i) b[(size_t)i * 188] = 0x47;
+        for (size_t i = 20; i < 180; ++i) b[i] = 0xFF;      // стаффинг PAT/PMT
+        t::check("MPEG-TS (шаг 188) -> не MP3", !sniff(b));
+    }
+
+    // 9. Тот же TS с 4-байтовой меткой времени (M2TS): шаг 192
+    {
+        std::vector<uint8_t> b = zeros(4 + 3 * 192 + 8);
+        for (int i = 0; i < 3; ++i) b[4 + (size_t)i * 192] = 0x47;
+        for (size_t i = 24; i < 184; ++i) b[i] = 0xFF;
+        t::check("MPEG-TS (шаг 192, M2TS) -> не MP3", !sniff(b));
+    }
+
+    // 10. LOAS/LATM: в этом виде AAC ELD лежит в .aac.
+    //     Полезная нагрузка произвольная, в ней легко встречается 0xFF 0xFF.
+    {
+        std::vector<uint8_t> b = zeros(1024);
+        b[0] = 0x56; b[1] = 0xE0; b[2] = 0x10;
+        for (size_t i = 40; i < 80; ++i) b[i] = 0xFF;
+        t::check("LOAS/LATM -> не MP3", !sniff(b));
+    }
+
+    // 11. Сплошной стаффинг 0xFF: индекс битрейта 1111 запрещён стандартом
+    {
+        std::vector<uint8_t> b(1024, 0xFF);
+        t::check("сплошной 0xFF -> не MP3", !sniff(b));
+    }
+
+    // 12. Запрещённый индекс битрейта при валидных прочих полях
+    {
+        std::vector<uint8_t> b = zeros(1024);
+        putMp3Frame(b, 100);
+        b[102] = 0xF0;                                   // bitrate=1111
+        t::check("индекс битрейта 1111 -> не MP3", !sniff(b));
+    }
+
+    // 13. «Свободный» битрейт 0000 minimp3 всё равно не разберёт
+    {
+        std::vector<uint8_t> b = zeros(1024);
+        putMp3Frame(b, 100);
+        b[102] = 0x00;                                   // bitrate=0000, freq=00
+        t::check("индекс битрейта 0000 -> не MP3", !sniff(b));
+    }
+
+    // 14. Зарезервированный индекс частоты
+    {
+        std::vector<uint8_t> b = zeros(1024);
+        putMp3Frame(b, 100);
+        b[102] = 0x9C;                                   // bitrate=1001, freq=11
+        t::check("индекс частоты 11 -> не MP3", !sniff(b));
+    }
+
+    // 15. Кадр в самом конце буфера не должен читаться за его границей
+    {
+        std::vector<uint8_t> b = zeros(6);
+        b[3] = 0xFF; b[4] = 0xFB; b[5] = 0x90;           // четвёртого байта нет
+        t::check("обрезанный кадр на границе буфера -> не MP3", !sniff(b));
+    }
+
     return t::report();
 }

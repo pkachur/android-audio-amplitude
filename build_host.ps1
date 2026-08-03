@@ -32,14 +32,14 @@ function Invoke-Test([string]$exe) {
     if ($LASTEXITCODE -ne 0) { throw "тесты провалены: $exe" }
 }
 
-Invoke-Cl 'test_envelope' 'cl /nologo /W4 /EHsc /I src /Fe:build\test_envelope.exe /Fo:build\ tests\test_envelope.cpp'
-Invoke-Cl 'test_sniff'    'cl /nologo /W4 /EHsc /I src /Fe:build\test_sniff.exe    /Fo:build\ tests\test_sniff.cpp'
+Invoke-Cl 'test_envelope' 'cl /nologo /W4 /D_CRT_SECURE_NO_WARNINGS /EHsc /I src /Fe:build\test_envelope.exe /Fo:build\ tests\test_envelope.cpp'
+Invoke-Cl 'test_sniff'    'cl /nologo /W4 /D_CRT_SECURE_NO_WARNINGS /EHsc /I src /Fe:build\test_sniff.exe    /Fo:build\ tests\test_sniff.cpp'
 Invoke-Test 'test_envelope.exe'
 Invoke-Test 'test_sniff.exe'
 
 if ($Tests) { exit 0 }
 
-Invoke-Cl 'amplitude.exe' ('cl /nologo /O2 /W4 /EHsc /I src /Fe:build\amplitude.exe /Fo:build\ ' +
+Invoke-Cl 'amplitude.exe' ('cl /nologo /O2 /W4 /D_CRT_SECURE_NO_WARNINGS /EHsc /I src /Fe:build\amplitude.exe /Fo:build\ ' +
                            'src\amplitude.cpp src\decoder_open.cpp src\decoder_minimp3.cpp src\decoder_mediandk.cpp')
 Write-Host "OK: build\amplitude.exe"
 
