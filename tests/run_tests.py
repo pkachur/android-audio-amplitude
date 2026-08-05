@@ -233,6 +233,99 @@ p = subprocess.run([EXE, MP3, '-n', '0', '-q'], stdout=subprocess.PIPE, stderr=s
 check('--limit 0 даёт пустой вывод и код 0',
       p.returncode == 0 and p.stdout.strip() == b'', 'код %d' % p.returncode)
 
+# 13b. --points ------------------------------------------------------------
+mix = [trunc2(l + r) for l, r in frames]
+
+
+def points_reference(vals, n, mode):
+    """Независимая реплика алгоритма подокон из src/envelope.h."""
+    cap = min(n * 32, 32768)
+    if cap < n * 2:
+        cap = n * 2
+    buf, cur, sub = [], [0, 0, 0, 0], 1
+    for v in vals:
+        a = abs(v)
+        if a > cur[0]:
+            cur[0] = a
+        cur[1] += a
+        cur[2] += v * v
+        cur[3] += 1
+        if cur[3] < sub:
+            continue
+        buf.append(cur)
+        cur = [0, 0, 0, 0]
+        if len(buf) < cap:
+            continue
+        half = len(buf) // 2
+        buf = [[max(buf[2 * k][0], buf[2 * k + 1][0]),
+                buf[2 * k][1] + buf[2 * k + 1][1],
+                buf[2 * k][2] + buf[2 * k + 1][2],
+                buf[2 * k][3] + buf[2 * k + 1][3]] for k in range(half)]
+        sub *= 2
+    if cur[3] > 0:
+        buf.append(cur)
+
+    s = len(buf)
+    pts = min(n, s)
+    out = []
+    for i in range(pts):
+        acc = [0, 0, 0, 0]
+        for k in range(i * s // pts, (i + 1) * s // pts):
+            acc[0] = max(acc[0], buf[k][0])
+            acc[1] += buf[k][1]
+            acc[2] += buf[k][2]
+            acc[3] += buf[k][3]
+        if mode == 'peak':
+            v = acc[0]
+        elif mode == 'avg':
+            v = acc[1] // acc[3]
+        else:
+            v = int(math.sqrt(acc[2] / acc[3]) + 0.5)
+        out.append(min(v, 32767))
+    return out
+
+
+# --points 1 проверяется полностью независимо: одна точка на весь файл — это
+# свёртка по всему потоку, границы подокон на неё не влияют.
+for mode in ('peak', 'avg', 'rms'):
+    got = run_text([MP3, '--points', '1', '-r', mode])
+    exp = reduce_block(mix, mode)
+    ok = len(got) == 1 and abs(got[0][0] - exp) <= TOL
+    check('--points 1 --reduce %s == свёртка по всему файлу' % mode, ok,
+          'получено %d, ожидалось %d' % (got[0][0] if got else -1, exp))
+
+got = run_text([MP3, '--points', '100'])
+check('--points 100 даёт ровно 100 строк', len(got) == 100, 'строк %d' % len(got))
+
+for mode in ('peak', 'rms', 'avg'):
+    got = run_text([MP3, '--points', '100', '-r', mode])
+    exp = points_reference(mix, 100, mode)
+    worst = max((abs(g[0] - e) for g, e in zip(got, exp)), default=0)
+    check('--points 100 --reduce %s совпадает с пересчётом' % mode,
+          len(got) == len(exp) and worst <= TOL,
+          'точек %d (ожидалось %d), max расхождение %d' % (len(got), len(exp), worst))
+
+got = run_text([MP3, '--points', '100', '-n', '50'])
+check('--points 100 + --limit 50 даёт 50 строк', len(got) == 50, 'строк %d' % len(got))
+
+got = run_text([MP3, '--points', '10', '-c', 'both'])
+check('--points + -c both: два числа в строке',
+      len(got) == 10 and all(len(g) == 2 for g in got))
+
+first = run([MP3, '--points', '100', '--header']).decode('ascii').split('\n')[0]
+check('--points: в заголовке points= и диапазон 0..32767',
+      'points=100' in first and 'range=0..32767' in first, first)
+
+for args, name in (
+        (['--points', '100', '--ms', '100'], '--points вместе с --ms отвергается'),
+        (['--points', '100', '--block', '512'], '--points вместе с --block отвергается'),
+        (['--ms', '100', '--block', '512'], '--ms вместе с --block отвергается'),
+        (['--points', '0'], '--points 0 отвергается'),
+        (['--points', '20000'], '--points сверх потолка отвергается')):
+    q = subprocess.run([EXE, MP3] + args + ['-q'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    msg = q.stderr.decode('utf-8', 'replace').strip()
+    check(name, q.returncode == 2 and msg != '', 'код %d: %s' % (q.returncode, msg[:80]))
+
 # 14. негативные случаи: ошибка должна быть видна кодом возврата ------------
 def expect_fail(args, name, expect_in_message=None):
     q = subprocess.run([EXE] + args + ['-q'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
