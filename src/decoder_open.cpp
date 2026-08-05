@@ -28,31 +28,6 @@ void setLastError(const char *fmt, ...)
     va_end(ap);
 }
 
-// ---------------------------------------------------- определение формата
-
-bool looksLikeMpegAudio(const uint8_t *d, size_t n)
-{
-    if (!d || n < 4) return false;
-
-    // Явно чужие контейнеры — чтобы случайный 0xFF в заголовке не сбил с толку.
-    if (n >= 12 && !memcmp(d + 4, "ftyp", 4)) return false;   // MP4 / M4A
-    if (!memcmp(d, "RIFF", 4)) return false;                  // WAV
-    if (!memcmp(d, "OggS", 4)) return false;                  // Ogg / Opus
-    if (!memcmp(d, "fLaC", 4)) return false;                  // FLAC
-    if (!memcmp(d, "FORM", 4)) return false;                  // AIFF
-
-    if (n >= 3 && !memcmp(d, "ID3", 3)) return true;
-
-    const size_t lim = n < 1024 ? n : 1024;
-    for (size_t i = 0; i + 1 < lim; ++i) {
-        if (d[i] != 0xFF || (d[i + 1] & 0xE0) != 0xE0) continue;
-        const int ver   = (d[i + 1] >> 3) & 0x03;   // 1 — зарезервировано
-        const int layer = (d[i + 1] >> 1) & 0x03;   // 0 — зарезервировано (это ADTS-AAC)
-        if (ver != 1 && layer != 0) return true;
-    }
-    return false;
-}
-
 bool mediandkAvailable()
 {
 #ifdef __ANDROID__
@@ -99,7 +74,10 @@ Decoder *openFile(const char *path, Backend backend)
     if (backend == BACKEND_MINIMP3)  return openMinimp3File(path);
     if (backend == BACKEND_MEDIANDK) return openMediandkFile(path);
 
-    uint8_t head[16] = {0};
+    // 1024 байта — столько же, сколько сканирует looksLikeMpegAudio, и минимум
+    // 377 байт нужно, чтобы разглядеть три пакета MPEG-TS. С прежними 16 байтами
+    // файл и буфер нюхались по-разному.
+    uint8_t head[1024] = {0};
     size_t n = 0;
     if (FILE *f = fopen(path, "rb")) {
         n = fread(head, 1, sizeof(head), f);
@@ -159,8 +137,13 @@ Decoder *openFd(int fd, long long offset, long long size, Backend backend)
 #ifdef AMP_HAVE_POSIX_IO
     // Для minimp3 читаем содержимое в память (декодеру нужен непрерывный буфер).
     // Сначала — сигнатура, чтобы не тянуть в память чужой формат зря.
-    uint8_t head[16] = {0};
-    const ssize_t hn = pread(fd, head, sizeof(head), (off_t)offset);
+    uint8_t head[1024] = {0};
+    // Дескриптор может указывать на срез внутри большого файла — так приходит
+    // ассет из APK или ContentResolver. Читать дальше size нельзя: в голову
+    // попадут байты соседнего файла, и формат определится по ним.
+    size_t hwant = sizeof(head);
+    if (size > 0 && (unsigned long long)size < (unsigned long long)hwant) hwant = (size_t)size;
+    const ssize_t hn = pread(fd, head, hwant, (off_t)offset);
     const bool mpeg = hn > 0 && looksLikeMpegAudio(head, (size_t)hn);
     SavedError first;
 

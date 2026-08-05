@@ -29,6 +29,9 @@ struct Options {
     bool         binary   = false;    // int32 little-endian вместо текста
     bool         header   = false;    // строка-комментарий с параметрами потока
     bool         quiet    = false;    // не печатать info в stderr
+    bool         gotBlock = false;    // сетка задана явно: нужно для взаимоисключения
+    bool         gotMs    = false;
+    bool         gotPoints = false;
 };
 
 void usage(const char *argv0)
@@ -44,6 +47,8 @@ void usage(const char *argv0)
         "  -b, --block N       свернуть N отсчётов в одно значение (по умолчанию 1)\n"
         "  -m, --ms N          то же, но окном N мс (N * частота / 1000 отсчётов);\n"
         "                      имеет приоритет над --block\n"
+        "  -p, --points N      выдать ровно N точек на весь файл (1..16384);\n"
+        "                      окно вычисляется само, взаимоисключающе с --ms и --block\n"
         "  -r, --reduce MODE   как сворачивать окно: peak (по умолч.) | rms | avg\n"
         "      --abs           выдавать модуль амплитуды\n"
         "      --raw           бинарный вывод: int32 little-endian\n"
@@ -57,11 +62,13 @@ void usage(const char *argv0)
         "на Android через системный MediaCodec.\n"
         "\n"
         "Текстовый вывод: одно значение в строке; для --channel both — два числа\n"
-        "через пробел (левый правый). Диапазон: -32768..32767.\n"
+        "через пробел (левый правый). Диапазон: -32768..32767, а с --points,\n"
+        "--abs и свёртками — 0..32767.\n"
         "\n"
-        "Без --block/--ms выдаётся одно значение на отсчёт файла (44100 значений\n"
-        "в секунду для 44.1 кГц). Огибающая по 100 мс:\n"
-        "  %s track.m4a --ms 100 --reduce rms\n",
+        "Сетку задаёт что-то одно: --points, --ms или --block. Без них выдаётся\n"
+        "одно значение на отсчёт файла (44100 значений в секунду для 44.1 кГц).\n"
+        "Сто точек на весь файл:\n"
+        "  %s track.m4a --points 100 --reduce rms\n",
         argv0, argv0);
 }
 
@@ -138,6 +145,16 @@ struct RawSink {
     }
 };
 
+/// Общая часть строки-заголовка: параметры потока без сетки и диапазона.
+/// Сетка и диапазон у двух путей разные, всё остальное обязано совпадать.
+void writeHeaderPrefix(Out &out, const amp::Decoder &dec, int outch)
+{
+    out.str("# backend="); out.str(dec.backend());
+    out.str(" hz=");       out.num(dec.sampleRate());
+    out.str(" channels="); out.num(dec.channels());
+    out.str(" values_per_point="); out.num(outch);
+}
+
 // ------------------------------------------------------------ разбор опций
 
 bool parseArgs(int argc, char **argv, Options &o)
@@ -176,11 +193,22 @@ bool parseArgs(int argc, char **argv, Options &o)
         } else if (!strcmp(a, "-b") || !strcmp(a, "--block")) {
             NEED_VAL();
             o.p.block = atoi(val);
+            o.gotBlock = true;
             if (o.p.block < 1) { fprintf(stderr, "amplitude: --block должен быть >= 1\n"); return false; }
         } else if (!strcmp(a, "-m") || !strcmp(a, "--ms")) {
             NEED_VAL();
             o.p.intervalMs = atoi(val);
+            o.gotMs = true;
             if (o.p.intervalMs < 1) { fprintf(stderr, "amplitude: --ms должен быть >= 1\n"); return false; }
+        } else if (!strcmp(a, "-p") || !strcmp(a, "--points")) {
+            NEED_VAL();
+            o.p.points = strtoll(val, nullptr, 10);
+            o.gotPoints = true;
+            if (o.p.points < 1 || o.p.points > amp::kMaxPoints) {
+                fprintf(stderr, "amplitude: --points должен быть от 1 до %lld\n",
+                        (long long)amp::kMaxPoints);
+                return false;
+            }
         } else if (!strcmp(a, "-n") || !strcmp(a, "--limit")) {
             NEED_VAL(); o.p.limit = strtoll(val, nullptr, 10);
         } else if (!strcmp(a, "--backend")) {
@@ -207,6 +235,14 @@ bool parseArgs(int argc, char **argv, Options &o)
             return false;
         }
         #undef NEED_VAL
+    }
+
+    // Раньше --ms молча вытеснял --block, и опечатка в вызове тихо давала не ту
+    // сетку. Теперь любое сочетание — отказ.
+    const int grid = (o.gotPoints ? 1 : 0) + (o.gotMs ? 1 : 0) + (o.gotBlock ? 1 : 0);
+    if (grid > 1) {
+        fprintf(stderr, "amplitude: сетку задаёт что-то одно: --points, --ms или --block\n");
+        return false;
     }
 
     if (!o.path) { usage(argv[0]); return false; }
@@ -252,17 +288,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    const int block = amp::resolveBlock(o.p, dec->sampleRate());
     const int outch = amp::valuesPerPoint(o.p, dec->channels());
-
-    if (!o.quiet) {
-        fprintf(stderr, "amplitude: %s, %d Гц, %d кан., отсчётов: %lld",
-                dec->backend(), dec->sampleRate(), dec->channels(), dec->totalFrames());
-        if (block > 1)
-            fprintf(stderr, ", окно %d отсчётов (%.1f мс)",
-                    block, dec->sampleRate() ? 1000.0 * block / dec->sampleRate() : 0.0);
-        fprintf(stderr, "\n");
-    }
 
     FILE *fout = stdout;
 #ifdef _WIN32
@@ -270,6 +296,8 @@ int main(int argc, char **argv)
     if (o.binary && !o.outPath) _setmode(_fileno(stdout), _O_BINARY);
 #endif
     if (o.outPath) {
+        // Открываем до декодирования: иначе на длинном файле об ошибке пути
+        // узнаешь только через минуту работы.
         fout = fopen(o.outPath, o.binary ? "wb" : "w");
         if (!fout) {
             fprintf(stderr, "amplitude: не могу открыть на запись: %s\n", o.outPath);
@@ -279,15 +307,63 @@ int main(int argc, char **argv)
     }
 
     long long points  = 0;
+    int       block   = 0;
     bool      writeOk = true;
-    {
-        Out out(fout);
 
+    if (o.p.points > 0) {
+        std::vector<int32_t> values;
+        long long totalSamples = 0;
+        points = amp::runPoints(*dec, o.p, values, &totalSamples);
+        block  = points > 0 ? (int)(totalSamples / points) : 0;
+
+        // Об урезанной выдаче говорим и в тихом режиме: это меняет контракт вывода.
+        if (points > 0 && points < o.p.points)
+            fprintf(stderr, "amplitude: отсчётов (%lld) меньше запрошенных точек (%lld)"
+                            " — выдано %lld\n", totalSamples, o.p.points, points);
+
+        if (!o.quiet) {
+            fprintf(stderr, "amplitude: %s, %d Гц, %d кан., отсчётов: %lld, %lld точек",
+                    dec->backend(), dec->sampleRate(), dec->channels(),
+                    dec->totalFrames(), points);
+            if (block > 0)
+                fprintf(stderr, " по ~%d отсчётов (~%.1f мс)",
+                        block, dec->sampleRate() ? 1000.0 * block / dec->sampleRate() : 0.0);
+            fprintf(stderr, "\n");
+        }
+
+        Out out(fout);
         if (o.header && !o.binary) {
-            out.str("# backend="); out.str(dec->backend());
-            out.str(" hz=");       out.num(dec->sampleRate());
-            out.str(" channels="); out.num(dec->channels());
-            out.str(" values_per_point="); out.num(outch);
+            writeHeaderPrefix(out, *dec, outch);
+            out.str(" points=");   out.num((int32_t)points);
+            out.str(" block=");    out.num(block);
+            out.str(" range=0..32767\n");
+        }
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (o.binary) {
+                out.le32(values[i]);
+            } else {
+                if (i % (size_t)outch) out.ch(' ');
+                out.num(values[i]);
+                if ((i + 1) % (size_t)outch == 0) out.ch('\n');
+            }
+        }
+        out.flush();
+        writeOk = !out.error();
+    } else {
+        block = amp::resolveBlock(o.p, dec->sampleRate());
+
+        if (!o.quiet) {
+            fprintf(stderr, "amplitude: %s, %d Гц, %d кан., отсчётов: %lld",
+                    dec->backend(), dec->sampleRate(), dec->channels(), dec->totalFrames());
+            if (block > 1)
+                fprintf(stderr, ", окно %d отсчётов (%.1f мс)",
+                        block, dec->sampleRate() ? 1000.0 * block / dec->sampleRate() : 0.0);
+            fprintf(stderr, "\n");
+        }
+
+        Out out(fout);
+        if (o.header && !o.binary) {
+            writeHeaderPrefix(out, *dec, outch);
             out.str(" block=");    out.num(block);
             out.str(" range=-32768..32767\n");
         }

@@ -11,6 +11,10 @@
 #include <cstddef>
 #include <cstdint>
 
+// Определение формата живёт в отдельном заголовке, чтобы тестироваться
+// без сборки декодеров. Включается здесь, чтобы не менять публичный API.
+#include "sniff.h"
+
 namespace amp {
 
 class Decoder {
@@ -57,10 +61,6 @@ bool mediandkAvailable();
 /// Текст последней ошибки (по потоку). Никогда не nullptr.
 const char *lastError();
 void setLastError(const char *fmt, ...);
-
-/// true, если начало буфера похоже на MPEG Audio (ID3 или sync-заголовок слоя I/II/III).
-/// ADTS-AAC (0xFFF1/0xFFF9) сюда намеренно не попадает — у него биты слоя нулевые.
-bool looksLikeMpegAudio(const uint8_t *data, size_t size);
 
 } // namespace amp
 

@@ -124,13 +124,14 @@ amp::Backend toBackend(jint v)
 }
 
 amp::Params toParams(jint channel, jint reduce, jint block, jint intervalMs,
-                     jboolean absolute, jint limitPoints)
+                     jint points, jboolean absolute, jint limitPoints)
 {
     amp::Params p;
     p.chan       = (int)channel;
     p.reduce     = (int)reduce;
     p.block      = block > 0 ? (int)block : 1;
     p.intervalMs = intervalMs > 0 ? (int)intervalMs : 0;
+    p.points     = points > 0 ? (long long)points : 0;
     p.absolute   = (absolute == JNI_TRUE);
     p.limit      = limitPoints > 0 ? (long long)limitPoints : -1;
     return p;
@@ -147,16 +148,25 @@ jintArray finish(JNIEnv *env, amp::Decoder *decRaw, const amp::Params &p, jintAr
     const int hz    = dec->sampleRate();
     const int nch   = dec->channels();
     const int outch = amp::valuesPerPoint(p, nch);
-    const int block = amp::resolveBlock(p, hz);
-
     std::vector<jint> values;
-    if (dec->totalFrames() > 0) {             // разумный резерв
-        long long points = (dec->totalFrames() + block - 1) / block;
-        if (p.limit > 0 && points > p.limit) points = p.limit;
-        if (points > 0) values.reserve((size_t)points * (size_t)outch);
+    int block = 0;
+
+    if (p.points > 0) {
+        std::vector<int32_t> pts;
+        long long totalSamples = 0;
+        const long long n = amp::runPoints(*dec, p, pts, &totalSamples);
+        block = n > 0 ? (int)(totalSamples / n) : 0;
+        values.assign(pts.begin(), pts.end());
+    } else {
+        block = amp::resolveBlock(p, hz);
+        if (dec->totalFrames() > 0) {             // разумный резерв
+            long long points = (dec->totalFrames() + block - 1) / block;
+            if (p.limit > 0 && points > p.limit) points = p.limit;
+            if (points > 0) values.reserve((size_t)points * (size_t)outch);
+        }
+        VecSink sink{values};
+        amp::run(*dec, p, sink);
     }
-    VecSink sink{values};
-    amp::run(*dec, p, sink);
 
     // Обрыв декодирования не должен выглядеть как успешный короткий результат.
     if (dec->failed()) return nullptr;
@@ -189,7 +199,7 @@ extern "C" {
 JNIEXPORT jintArray JNICALL
 Java_com_example_amplitude_Amplitude_nativeDecodeFile(
         JNIEnv *env, jclass, jstring jpath,
-        jint channel, jint reduce, jint block, jint intervalMs,
+        jint channel, jint reduce, jint block, jint intervalMs, jint points,
         jboolean absolute, jint limitPoints, jint backend, jintArray info)
 {
     StringUtfGuard path(env, jpath);
@@ -199,7 +209,7 @@ Java_com_example_amplitude_Amplitude_nativeDecodeFile(
     // иначе исключение улетело бы через границу JNI и уронило процесс.
     try {
         amp::Decoder *dec = amp::openFile(path.get(), toBackend(backend));
-        return finish(env, dec, toParams(channel, reduce, block, intervalMs,
+        return finish(env, dec, toParams(channel, reduce, block, intervalMs, points,
                                          absolute, limitPoints), info);
     } catch (const std::bad_alloc &) {
         return throwOom(env);
@@ -211,13 +221,13 @@ Java_com_example_amplitude_Amplitude_nativeDecodeFile(
 JNIEXPORT jintArray JNICALL
 Java_com_example_amplitude_Amplitude_nativeDecodeFd(
         JNIEnv *env, jclass, jint fd, jlong offset, jlong size,
-        jint channel, jint reduce, jint block, jint intervalMs,
+        jint channel, jint reduce, jint block, jint intervalMs, jint points,
         jboolean absolute, jint limitPoints, jint backend, jintArray info)
 {
     try {
         amp::Decoder *dec = amp::openFd((int)fd, (long long)offset, (long long)size,
                                         toBackend(backend));
-        return finish(env, dec, toParams(channel, reduce, block, intervalMs,
+        return finish(env, dec, toParams(channel, reduce, block, intervalMs, points,
                                          absolute, limitPoints), info);
     } catch (const std::bad_alloc &) {
         return throwOom(env);
@@ -227,7 +237,7 @@ Java_com_example_amplitude_Amplitude_nativeDecodeFd(
 JNIEXPORT jintArray JNICALL
 Java_com_example_amplitude_Amplitude_nativeDecodeBytes(
         JNIEnv *env, jclass, jbyteArray jdata, jint dataOffset, jint dataLength,
-        jint channel, jint reduce, jint block, jint intervalMs,
+        jint channel, jint reduce, jint block, jint intervalMs, jint points,
         jboolean absolute, jint limitPoints, jint backend, jintArray info)
 {
     if (!jdata) { amp::setLastError("массив данных не задан"); return nullptr; }
@@ -248,7 +258,7 @@ Java_com_example_amplitude_Amplitude_nativeDecodeBytes(
         amp::Decoder *dec = amp::openMemory(
                 reinterpret_cast<const uint8_t *>(data.get()) + dataOffset,
                 (size_t)dataLength, toBackend(backend));
-        return finish(env, dec, toParams(channel, reduce, block, intervalMs,
+        return finish(env, dec, toParams(channel, reduce, block, intervalMs, points,
                                          absolute, limitPoints), info);
     } catch (const std::bad_alloc &) {
         return throwOom(env);
