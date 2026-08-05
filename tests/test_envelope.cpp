@@ -175,5 +175,18 @@ int main()
               amp::resolveBlock(p, 22050) == 2205);
     }
 
+    // 13. rms считается по целой сумме квадратов и округляется к ближайшему
+    {
+        std::vector<int16_t> pcm;
+        pcm.push_back(3); pcm.push_back(4);      // sqrt((9+16)/2) = 3.5355 -> 4
+        amp::Params p;
+        p.block  = 2;
+        p.reduce = amp::RD_RMS;
+        const std::vector<int32_t> out = runOn(pcm, 1, p);
+        char detail[32];
+        snprintf(detail, sizeof(detail), "получено %d", out.empty() ? -1 : out[0]);
+        t::check("rms(3,4) == 4", out.size() == 1 && out[0] == 4, detail);
+    }
+
     return t::report();
 }

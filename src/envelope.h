@@ -68,7 +68,11 @@ long long run(Decoder &dec, const Params &p, Sink &sink)
 
     int64_t accPeak[2] = {0, 0};
     int64_t accAbs[2]  = {0, 0};
-    double  accSq[2]   = {0.0, 0.0};
+    // Целая сумма: квадраты PCM16 не переполняют int64 на потоках до полусотни
+    // часов, а double начал бы округлять с 2^53 и сделал бы результат зависимым
+    // от порядка сложения — тогда runPoints со слиянием подокон разошёлся бы
+    // с run() в последнем бите.
+    int64_t accSq[2]   = {0, 0};
     int     inBlock    = 0;
     long long points   = 0;
     bool    stop       = false;
@@ -104,18 +108,18 @@ long long run(Decoder &dec, const Params &p, Sink &sink)
                     const int64_t a = v[c] < 0 ? -(int64_t)v[c] : (int64_t)v[c];
                     if (a > accPeak[c]) accPeak[c] = a;
                     accAbs[c] += a;
-                    accSq[c]  += (double)v[c] * (double)v[c];
+                    accSq[c]  += (int64_t)v[c] * (int64_t)v[c];
                 }
                 if (++inBlock < block) continue;
 
                 int32_t w[2] = {0, 0};
                 for (int c = 0; c < outch; ++c) {
                     switch (p.reduce) {
-                        case RD_RMS: w[c] = clampAmp((int64_t)(sqrt(accSq[c] / inBlock) + 0.5)); break;
-                        case RD_AVG: w[c] = clampAmp(accAbs[c] / inBlock);                      break;
-                        default:     w[c] = clampAmp(accPeak[c]);                                break;
+                        case RD_RMS: w[c] = clampAmp((int64_t)(sqrt((double)accSq[c] / inBlock) + 0.5)); break;
+                        case RD_AVG: w[c] = clampAmp(accAbs[c] / inBlock);                              break;
+                        default:     w[c] = clampAmp(accPeak[c]);                                        break;
                     }
-                    accPeak[c] = 0; accAbs[c] = 0; accSq[c] = 0.0;
+                    accPeak[c] = 0; accAbs[c] = 0; accSq[c] = 0;
                 }
                 inBlock = 0;
                 sink(w, outch);
@@ -131,9 +135,9 @@ long long run(Decoder &dec, const Params &p, Sink &sink)
         int32_t w[2] = {0, 0};
         for (int c = 0; c < outch; ++c) {
             switch (p.reduce) {
-                case RD_RMS: w[c] = clampAmp((int64_t)(sqrt(accSq[c] / inBlock) + 0.5)); break;
-                case RD_AVG: w[c] = clampAmp(accAbs[c] / inBlock);                      break;
-                default:     w[c] = clampAmp(accPeak[c]);                                break;
+                case RD_RMS: w[c] = clampAmp((int64_t)(sqrt((double)accSq[c] / inBlock) + 0.5)); break;
+                case RD_AVG: w[c] = clampAmp(accAbs[c] / inBlock);                              break;
+                default:     w[c] = clampAmp(accPeak[c]);                                        break;
             }
         }
         sink(w, outch);
