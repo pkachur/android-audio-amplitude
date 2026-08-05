@@ -138,7 +138,12 @@ Decoder *openFd(int fd, long long offset, long long size, Backend backend)
     // Для minimp3 читаем содержимое в память (декодеру нужен непрерывный буфер).
     // Сначала — сигнатура, чтобы не тянуть в память чужой формат зря.
     uint8_t head[1024] = {0};
-    const ssize_t hn = pread(fd, head, sizeof(head), (off_t)offset);
+    // Дескриптор может указывать на срез внутри большого файла — так приходит
+    // ассет из APK или ContentResolver. Читать дальше size нельзя: в голову
+    // попадут байты соседнего файла, и формат определится по ним.
+    size_t hwant = sizeof(head);
+    if (size > 0 && (unsigned long long)size < (unsigned long long)hwant) hwant = (size_t)size;
+    const ssize_t hn = pread(fd, head, hwant, (off_t)offset);
     const bool mpeg = hn > 0 && looksLikeMpegAudio(head, (size_t)hn);
     SavedError first;
 
