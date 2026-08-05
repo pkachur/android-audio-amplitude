@@ -37,7 +37,8 @@ object Amplitude {
      * @param channels       каналов в исходном файле (1 или 2)
      * @param valuesPerPoint 1, либо 2 для CH_BOTH со стереофайлом
      * @param totalFrames    всего отсчётов в источнике (до свёртки), 0 если неизвестно
-     * @param blockSamples   фактический размер окна в отсчётах
+     * @param blockSamples   фактический размер окна в отсчётах; при points —
+     *                       средняя ширина точки
      * @param values         значения; точек = values.size / valuesPerPoint
      */
     class Amplitudes(
@@ -64,25 +65,44 @@ object Amplitude {
 
     class DecodeException(message: String) : RuntimeException(message)
 
+    /** Потолок points — тот же, что в C++ (amp::kMaxPoints). */
+    const val MAX_POINTS = 16384
+
+    private fun checkGrid(intervalMs: Int, block: Int, points: Int) {
+        val given = listOf(points > 0, intervalMs > 0, block > 1).count { it }
+        require(given <= 1) {
+            "сетку задаёт что-то одно: points, intervalMs или block"
+        }
+        require(points in 0..MAX_POINTS) {
+            "points должен быть от 1 до $MAX_POINTS (0 = не использовать)"
+        }
+    }
+
     /**
      * @param intervalMs  окно в миллисекундах (0 = не использовать)
-     * @param block       окно в отсчётах; игнорируется, если задан intervalMs
+     * @param block       окно в отсчётах
+     * @param points      выдать ровно столько точек на весь файл (0 = не использовать);
+     *                    ширина окна вычисляется сама
      * @param limitPoints не больше стольких точек (0 = без ограничения)
+     *
+     * Сетку задаёт что-то одно: points, intervalMs или block.
      */
     @JvmOverloads
     fun fromFile(
         file: File,
         intervalMs: Int = 0,
         block: Int = 1,
+        points: Int = 0,
         channel: Int = CH_MIX,
         reduce: Int = REDUCE_PEAK,
         absolute: Boolean = false,
         limitPoints: Int = 0,
         backend: Int = BACKEND_AUTO,
     ): Amplitudes {
+        checkGrid(intervalMs, block, points)
         val info = IntArray(5)
         val values = nativeDecodeFile(
-            file.absolutePath, channel, reduce, block, intervalMs,
+            file.absolutePath, channel, reduce, block, intervalMs, points,
             absolute, limitPoints, backend, info
         ) ?: fail(file.name)
         return build(info, values)
@@ -95,17 +115,19 @@ object Amplitude {
         uri: Uri,
         intervalMs: Int = 0,
         block: Int = 1,
+        points: Int = 0,
         channel: Int = CH_MIX,
         reduce: Int = REDUCE_PEAK,
         absolute: Boolean = false,
         limitPoints: Int = 0,
         backend: Int = BACKEND_AUTO,
     ): Amplitudes {
+        checkGrid(intervalMs, block, points)
         val info = IntArray(5)
         val values = context.contentResolver.openFileDescriptor(uri, "r").use { pfd ->
             pfd ?: throw DecodeException("не удалось открыть $uri")
             nativeDecodeFd(
-                pfd.fd, 0L, pfd.statSize, channel, reduce, block, intervalMs,
+                pfd.fd, 0L, pfd.statSize, channel, reduce, block, intervalMs, points,
                 absolute, limitPoints, backend, info
             )
         } ?: fail(uri.toString())
@@ -120,6 +142,7 @@ object Amplitude {
         length: Int = data.size - offset,
         intervalMs: Int = 0,
         block: Int = 1,
+        points: Int = 0,
         channel: Int = CH_MIX,
         reduce: Int = REDUCE_PEAK,
         absolute: Boolean = false,
@@ -129,9 +152,10 @@ object Amplitude {
         require(offset >= 0 && length > 0 && length <= data.size - offset) {
             "некорректный диапазон: offset=$offset length=$length при размере ${data.size}"
         }
+        checkGrid(intervalMs, block, points)
         val info = IntArray(5)
         val values = nativeDecodeBytes(
-            data, offset, length, channel, reduce, block, intervalMs,
+            data, offset, length, channel, reduce, block, intervalMs, points,
             absolute, limitPoints, backend, info
         ) ?: fail("буфер ($length байт)")
         return build(info, values)
@@ -149,20 +173,22 @@ object Amplitude {
 
     @JvmStatic
     private external fun nativeDecodeFile(
-        path: String, channel: Int, reduce: Int, block: Int, intervalMs: Int,
+        path: String, channel: Int, reduce: Int, block: Int, intervalMs: Int, points: Int,
         absolute: Boolean, limitPoints: Int, backend: Int, info: IntArray,
     ): IntArray?
 
     @JvmStatic
     private external fun nativeDecodeFd(
         fd: Int, offset: Long, size: Long, channel: Int, reduce: Int, block: Int,
-        intervalMs: Int, absolute: Boolean, limitPoints: Int, backend: Int, info: IntArray,
+        intervalMs: Int, points: Int, absolute: Boolean, limitPoints: Int, backend: Int,
+        info: IntArray,
     ): IntArray?
 
     @JvmStatic
     private external fun nativeDecodeBytes(
         data: ByteArray, offset: Int, length: Int, channel: Int, reduce: Int, block: Int,
-        intervalMs: Int, absolute: Boolean, limitPoints: Int, backend: Int, info: IntArray,
+        intervalMs: Int, points: Int, absolute: Boolean, limitPoints: Int, backend: Int,
+        info: IntArray,
     ): IntArray?
 
     @JvmStatic
