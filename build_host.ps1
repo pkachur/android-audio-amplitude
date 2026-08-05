@@ -1,4 +1,4 @@
-# build_host.ps1 — сборка и прогон на Windows-хосте (MSVC), только MP3-путь.
+﻿# build_host.ps1 — сборка и прогон на Windows-хосте (MSVC), только MP3-путь.
 # GNU make под Windows обычно нет, поэтому Makefile здесь не годится.
 #
 #   .\build_host.ps1            # собрать всё и прогнать юнит-тесты
@@ -44,6 +44,19 @@ Invoke-Cl 'amplitude.exe' ('cl /nologo /O2 /W4 /D_CRT_SECURE_NO_WARNINGS /EHsc /
 Write-Host "OK: build\amplitude.exe"
 
 if ($Func) {
-    python3 tests\run_tests.py build\amplitude.exe
+    # python3 на Windows обычно оказывается заглушкой Microsoft Store: она есть
+    # в PATH, печатает «Python» и возвращает 9009. Берём первый интерпретатор,
+    # который действительно отвечает на --version.
+    $py = $null
+    foreach ($cand in 'python3', 'python', 'py') {
+        if (-not (Get-Command $cand -ErrorAction SilentlyContinue)) { continue }
+        # Перенаправление делает cmd: если гасить stderr средствами PowerShell,
+        # вывод заглушки станет ошибкой и утащит за собой весь скрипт.
+        cmd /c "$cand --version >nul 2>&1"
+        if ($LASTEXITCODE -eq 0) { $py = $cand; break }
+    }
+    if (-not $py) { throw 'не найден рабочий python — функциональные тесты не запустить' }
+
+    & $py tests\run_tests.py build\amplitude.exe
     if ($LASTEXITCODE -ne 0) { throw 'функциональные тесты провалены' }
 }

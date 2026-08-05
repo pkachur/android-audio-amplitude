@@ -7,7 +7,16 @@
 #include <vector>
 
 #define MINIMP3_IMPLEMENTATION
+#ifdef _MSC_VER
+// minimp3 — сторонний public domain-код, править его не наша забота: под /W4
+// MSVC выдаёт на нём три десятка C4244/C4267/C4456. Глушим ровно на время
+// включения, свой код по-прежнему собирается на /W4 без единого замечания.
+#  pragma warning(push, 0)
+#endif
 #include "minimp3_ex.h"
+#ifdef _MSC_VER
+#  pragma warning(pop)
+#endif
 
 namespace amp {
 

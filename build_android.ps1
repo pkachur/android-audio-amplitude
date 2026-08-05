@@ -1,4 +1,4 @@
-# build_android.ps1 — кросс-сборка под Android с Windows-хоста.
+﻿# build_android.ps1 — кросс-сборка под Android с Windows-хоста.
 # На самом устройстве/в Linux пользуйтесь Makefile — этот скрипт нужен только
 # потому, что GNU make на Windows обычно нет.
 #
