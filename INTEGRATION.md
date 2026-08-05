@@ -41,11 +41,17 @@ Makefile                   сборка CLI (на устройстве или к
 (≈42 МБ в `IntArray`). Практически всегда задавайте окно:
 
 * `intervalMs = 100` — окно 100 мс (10 точек в секунду);
-* либо `block = N` — окно ровно в N отсчётов.
+* либо `block = N` — окно ровно в N отсчётов;
+* либо `points = N` — ровно N значений на весь файл, ширина окна вычисляется сама.
 
 `intervalMs` пересчитывается в отсчёты по реальной частоте файла:
-`block = sampleRate * intervalMs / 1000`. Если задано и то, и другое, побеждает
-`intervalMs`.
+`block = sampleRate * intervalMs / 1000`.
+
+`points` — выдать ровно столько значений на весь файл; ширина окна вычисляется
+сама. Задавать вместе с `intervalMs` или `block` нельзя — будет
+`IllegalArgumentException`. Потолок — `Amplitude.MAX_POINTS` (16384).
+При `points` поле `blockSamples` содержит среднюю ширину точки, поэтому
+`pointDurationMs` продолжает работать.
 
 Как сворачивается окно (`reduce`):
 
@@ -114,6 +120,11 @@ val amp = withContext(Dispatchers.IO) {
     Amplitude.fromUri(context, uri, intervalMs = 100, reduce = Amplitude.REDUCE_RMS)
 }
 
+// ровно 100 точек на файл — удобно, когда волна рисуется в фиксированную ширину
+val bars = withContext(Dispatchers.IO) {
+    Amplitude.fromUri(context, uri, points = 100, reduce = Amplitude.REDUCE_RMS)
+}
+
 Log.d("amp", "${amp.sampleRate} Гц, ${amp.channels} кан., точек ${amp.points}, " +
              "по ${amp.pointDurationMs} мс")
 amp.values.forEachIndexed { i, v -> /* v: Int в диапазоне -32768..32767 */ }
@@ -157,6 +168,9 @@ Amplitude.fromBytes(byteArray, intervalMs = 100)       // из сети, assets,
   час звука — это 36 000 точек (144 КБ). Без окна тот же час — 570 МБ, чего
   делать нельзя.
 * `limitPoints` жёстко ограничивает выдачу (полезно для превью).
+* `points = N` ограничивает выдачу по построению: расход памяти известен заранее
+  и не зависит от длины файла. Сам проход тоже ограничен — подокна сливаются
+  попарно, а не копятся.
 
 ---
 
